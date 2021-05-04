@@ -1,0 +1,80 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: manages s3 event notification configuration
+Parameters:
+  S3EventNotificationCustomResourceArtifact:
+    Type: String
+    Default: s3-event-src.zip
+Resources:
+  S3EventNotificationLifecycleManager:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "s3-event-faas"
+      Description: "manages s3 events for cloudformation"
+      Handler: main.lambda_handler
+      Role: !GetAtt S3EventNotificationLifecycleManagerRole.Arn
+      Runtime: python3.8
+      Timeout: 50
+      Layers:
+        - !Sub "arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-python38-requests:16"
+      Code:
+        S3Bucket: "YOUR-BUCKET-NAME"
+        S3Key: !Ref S3EventNotificationCustomResourceArtifact
+      Environment:
+          Variables:
+            LAMBDA_ARN: "YOUR-LAMBDA-ARN"
+            ARTIFACTS_BUCKET: "YOUR-BUCKET-NAME"
+  S3EventNotificationLifecycleManagerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+            Action:
+            - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: AllowS3EventCustomLambdaInvoke
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketNotification
+                  - s3:PutBucketNotification
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+  S3EventNotificationLifecycleManagerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DependsOn:
+      - S3EventNotificationLifecycleManager
+    Properties:
+      RetentionInDays: 90
+      LogGroupName: !Sub /aws/lambda/${S3EventNotificationLifecycleManager}
+  CustomResourceLambdaInvokeS3EventConfiguration:
+  # depend on: 1) lambda to trigger, 2) preceding s3 event configurations,
+  # 3) S3EventNotificationLifecycleManagerLogGroup (avoids lingering log
+  # group after destroy). depending on preceding s3 event configurations avoids
+  # 'PutBucketNotificationConfiguration operation: A conflicting conditional
+  # operation is currently in progress against this resource. Please try again.'
+    DependsOn:
+    # lambda to deploy
+      - S3EventNotificationLifecycleManager
+    # preceding s3 event configurations (S3EventNotificationLifecycleManager first)
+      # - none
+    # S3EventNotificationLifecycleManagerLogGroup
+      - S3EventNotificationLifecycleManagerLogGroup
+    Type: Custom::CustomResourceLambdaInvokeS3EventConfiguration
+    Properties:
+      ServiceToken: !GetAtt S3EventNotificationLifecycleManager.Arn
+      AccountId: !Ref AWS::AccountId
+      ObjectName: !Ref S3EventNotificationCustomResourceArtifact
+      ResourceName: !Ref S3EventNotificationLifecycleManager
